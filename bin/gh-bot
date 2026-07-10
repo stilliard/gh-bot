@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Wrapper around `gh` that authenticates as the stapps-d2 GitHub App bot
-# instead of the caller's own `gh auth login` session, so automated
-# comments (Claude Code, Codex, etc.) show up as the bot.
+# Wrapper around `gh` that authenticates as a GitHub App bot instead of the
+# caller's own `gh auth login` session, so automated comments (Claude Code,
+# Codex, etc.) show up as the bot.
 #
 # Config (env vars, typically loaded from a gitignored .env):
 #   GH_BOT_APP_ID           GitHub App ID
@@ -13,14 +13,16 @@
 # Usage:
 #   gh-bot comment --repo owner/repo --number 123 ["text"]
 #   gh-bot reply --repo owner/repo --pr 123 --comment-id ID ["text"]
+#   gh-bot issue-create --repo owner/repo --title "Title" ["body text"]
+#   gh-bot issue-update --repo owner/repo --number 123 [--title T] [--state open|closed] ["body text"]
 #
-# If "text" is omitted, the body is read from stdin.
+# If "text"/body is omitted, the body is read from stdin.
 
 set -euo pipefail
 
 print_help() {
   cat <<'EOF'
-gh-bot — post issue/PR comments as the stapps-d2 GitHub App bot
+gh-bot — post issue/PR comments as a GitHub App bot
 
 USAGE:
   gh-bot <command> [options]
@@ -28,6 +30,8 @@ USAGE:
 COMMANDS:
   comment          Post a general comment on an issue or PR
   reply            Reply to an existing PR review (line) comment thread
+  issue-create     Create a new issue
+  issue-update     Update an existing issue (title/body/state/labels/assignees)
 
 CONFIG (env vars, typically loaded from a gitignored .env next to this script):
   GH_BOT_APP_ID           GitHub App ID
@@ -86,6 +90,54 @@ EXAMPLE:
 EOF
 }
 
+print_issue_create_help() {
+  cat <<'EOF'
+gh-bot issue-create — create a new issue
+
+USAGE:
+  gh-bot issue-create --repo owner/repo --title "Title" ["body text"]
+
+OPTIONS:
+  --repo owner/repo    Target repository (required)
+  --title TEXT         Issue title (required)
+  --label NAME         Add a label (repeatable)
+  --assignee USER      Add an assignee (repeatable)
+  --body, --comment    Issue body (or pass as a trailing positional arg)
+  [text]               Issue body; if omitted (and no --body), read from stdin
+
+EXAMPLES:
+  gh-bot issue-create --repo owner/repo --title "Bug: crash on save" "Steps to reproduce..."
+  gh-bot issue-create --repo owner/repo --title "Bug" --label bug --label needs-triage \
+    --assignee octocat --body "Details here"
+EOF
+}
+
+print_issue_update_help() {
+  cat <<'EOF'
+gh-bot issue-update — update an existing issue
+
+USAGE:
+  gh-bot issue-update --repo owner/repo --number N [options] ["body text"]
+
+OPTIONS:
+  --repo owner/repo    Target repository (required)
+  --number N           Issue number (required)
+  --title TEXT         New title
+  --state open|closed  New state
+  --label NAME         Set labels to this list (repeatable; replaces existing labels)
+  --assignee USER      Set assignees to this list (repeatable; replaces existing assignees)
+  --body, --comment    New body (or pass as a trailing positional arg)
+  [text]               New body; if omitted (and no --body/--title/--state/...), read from stdin
+
+At least one of --title/--state/--label/--assignee/body must be given.
+--label and --assignee REPLACE the full existing list, not append.
+
+EXAMPLES:
+  gh-bot issue-update --repo owner/repo --number 42 --state closed
+  gh-bot issue-update --repo owner/repo --number 42 --title "New title" --label bug --label p1
+EOF
+}
+
 case "${1:-}" in
   ""|help)
     print_help
@@ -96,6 +148,12 @@ case "${1:-}" in
     ;;
   reply)
     for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && { print_reply_help; exit 0; }; done
+    ;;
+  issue-create)
+    for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && { print_issue_create_help; exit 0; }; done
+    ;;
+  issue-update)
+    for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && { print_issue_update_help; exit 0; }; done
     ;;
   -h|--help)
     print_help
@@ -233,14 +291,97 @@ cmd_reply() {
   echo "Reply posted on ${repo}#${pr} (in reply to comment ${comment_id})"
 }
 
+cmd_issue_create() {
+  local repo="" title="" body_arg=() labels=() assignees=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="$2"; shift 2 ;;
+      --title) title="$2"; shift 2 ;;
+      --label) labels+=("$2"); shift 2 ;;
+      --assignee) assignees+=("$2"); shift 2 ;;
+      --body|--comment) body_arg=("$2"); shift 2 ;;
+      --*) echo "gh-bot issue-create: unknown option '$1'" >&2; exit 1 ;;
+      *) body_arg+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$repo" && -n "$title" ]] || {
+    echo "usage: gh-bot issue-create --repo owner/repo --title TEXT [text]" >&2
+    exit 1
+  }
+
+  local body token fields=() label assignee response number url
+  body=$(read_body "${body_arg[@]:-}")
+  for label in "${labels[@]:-}"; do
+    [[ -n "$label" ]] && fields+=(-f "labels[]=$label")
+  done
+  for assignee in "${assignees[@]:-}"; do
+    [[ -n "$assignee" ]] && fields+=(-f "assignees[]=$assignee")
+  done
+  token=$(get_installation_token "$repo")
+
+  response=$(GH_TOKEN="$token" gh api "repos/${repo}/issues" -f title="$title" -f body="$body" "${fields[@]}")
+  number=$(printf '%s' "$response" | jq -r '.number')
+  url=$(printf '%s' "$response" | jq -r '.html_url')
+  echo "Issue created: ${repo}#${number} ($url)"
+}
+
+cmd_issue_update() {
+  local repo="" number="" title="" state="" body_arg=() body_provided=0 labels=() assignees=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="$2"; shift 2 ;;
+      --number) number="$2"; shift 2 ;;
+      --title) title="$2"; shift 2 ;;
+      --state) state="$2"; shift 2 ;;
+      --label) labels+=("$2"); shift 2 ;;
+      --assignee) assignees+=("$2"); shift 2 ;;
+      --body|--comment) body_arg=("$2"); body_provided=1; shift 2 ;;
+      --*) echo "gh-bot issue-update: unknown option '$1'" >&2; exit 1 ;;
+      *) body_arg+=("$1"); body_provided=1; shift ;;
+    esac
+  done
+  [[ -n "$repo" && -n "$number" ]] || {
+    echo "usage: gh-bot issue-update --repo owner/repo --number N [options] [text]" >&2
+    exit 1
+  }
+  if [[ -n "$state" && "$state" != "open" && "$state" != "closed" ]]; then
+    echo "gh-bot issue-update: --state must be 'open' or 'closed'" >&2
+    exit 1
+  fi
+  if [[ -z "$title" && -z "$state" && "$body_provided" -eq 0 && ${#labels[@]} -eq 0 && ${#assignees[@]} -eq 0 ]]; then
+    echo "gh-bot issue-update: nothing to update — pass --title/--state/--label/--assignee or a body" >&2
+    exit 1
+  fi
+
+  local body token fields=() label assignee
+  [[ -n "$title" ]] && fields+=(-f "title=$title")
+  [[ -n "$state" ]] && fields+=(-f "state=$state")
+  if [[ "$body_provided" -eq 1 ]]; then
+    body=$(read_body "${body_arg[@]:-}")
+    fields+=(-f "body=$body")
+  fi
+  for label in "${labels[@]:-}"; do
+    [[ -n "$label" ]] && fields+=(-f "labels[]=$label")
+  done
+  for assignee in "${assignees[@]:-}"; do
+    [[ -n "$assignee" ]] && fields+=(-f "assignees[]=$assignee")
+  done
+  token=$(get_installation_token "$repo")
+
+  GH_TOKEN="$token" gh api --method PATCH "repos/${repo}/issues/${number}" "${fields[@]}" >/dev/null
+  echo "Issue updated: ${repo}#${number}"
+}
+
 main() {
   local sub="${1:-}"
   [[ $# -gt 0 ]] && shift || true
   case "$sub" in
     comment) cmd_comment "$@" ;;
     reply) cmd_reply "$@" ;;
+    issue-create) cmd_issue_create "$@" ;;
+    issue-update) cmd_issue_update "$@" ;;
     *)
-      echo "usage: gh-bot <comment|reply> [options]" >&2
+      echo "usage: gh-bot <comment|reply|issue-create|issue-update> [options]" >&2
       exit 1
       ;;
   esac

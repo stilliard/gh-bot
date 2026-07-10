@@ -2,9 +2,9 @@
 
 ## gh-bot
 
-`bin/gh-bot` posts issue/PR comments as the `stapps-d2` GitHub App bot instead
-of your own `gh auth login` identity. Useful so automated comments (Claude
-Code, Codex, etc.) are visibly distinguishable from comments you post
+`bin/gh-bot` posts comments and creates/updates issues as a GitHub App bot
+instead of your own `gh auth login` identity. Useful so automated activity
+(Claude Code, Codex, etc.) is visibly distinguishable from actions you take
 yourself.
 
 The App's installation ID is looked up per-repo at runtime (via the App's
@@ -67,10 +67,18 @@ EOF
 # Reply to an existing PR review (line) comment thread
 gh-bot reply --repo owner/repo --pr 123 --comment-id 987654321 \
   "Fixed in a1b2c3d, thanks!"
+
+# Create an issue
+gh-bot issue-create --repo owner/repo --title "Bug: crash on save" \
+  --label bug --assignee octocat "Steps to reproduce..."
+
+# Update an issue (title/state/labels/assignees and/or body)
+gh-bot issue-update --repo owner/repo --number 42 --state closed
+gh-bot issue-update --repo owner/repo --number 42 --title "New title" --label bug --label p1
 ```
 
-Run `gh-bot --help`, `gh-bot comment --help`, or `gh-bot reply --help` for
-full option details.
+Run `gh-bot --help` or `gh-bot <command> --help` (e.g. `gh-bot issue-update
+--help`) for full option details on any command.
 
 Each invocation mints a fresh short-lived installation token (no caching),
 so no bot credentials are ever persisted outside your `.env`/`.pem`.
