@@ -1,6 +1,4 @@
-# d2
-
-## gh-bot
+# gh-bot (d2)
 
 `bin/gh-bot` posts comments and creates/updates issues as a GitHub App bot
 instead of your own `gh auth login` identity. Useful so automated activity
@@ -11,7 +9,7 @@ The App's installation ID is looked up per-repo at runtime (via the App's
 own JWT), so the same App ID/private key work across any account or org the
 App is installed on — no per-org config needed.
 
-### Required App permissions
+## Required App permissions
 
 Your GitHub App needs the following repository permissions (GitHub App
 settings → Permissions & events):
@@ -26,7 +24,7 @@ After changing permissions on an existing App, you must accept the updated
 permissions on each installation (GitHub will prompt you, or re-visit
 `https://github.com/settings/installations`).
 
-### Setup
+## Setup
 
 1. Create a GitHub App and install it on whichever accounts/orgs you want it
    to act in, and on the specific repos within each.
@@ -36,7 +34,7 @@ permissions on each installation (GitHub will prompt you, or re-visit
    - `GH_BOT_APP_ID` — the App's ID
    - `GH_BOT_PRIVATE_KEY_PATH` — path to the `.pem` file
 
-### Making it available on your PATH
+## Making it available on your PATH
 
 `gh-bot` resolves its own real location (following symlinks) to find `.env`
 next to it, so it's safe to symlink onto your `PATH` instead of always
@@ -52,7 +50,7 @@ sudo ln -s "$(pwd)/bin/gh-bot" /usr/local/bin/gh-bot   # system-wide
 `/usr/local/bin` for locally-installed system-wide tools.) Once linked, just
 run `gh-bot comment ...` from anywhere.
 
-### Usage
+## Usage
 
 ```sh
 # General issue/PR comment
@@ -83,7 +81,7 @@ Run `gh-bot --help` or `gh-bot <command> --help` (e.g. `gh-bot issue-update
 Each invocation mints a fresh short-lived installation token (no caching),
 so no bot credentials are ever persisted outside your `.env`/`.pem`.
 
-### Teaching an agent to use it
+## Teaching an agent to use it
 
 Paste something like this into your `CLAUDE.md`/`AGENTS.md` so agentic
 coding tools use `gh-bot` (not `gh`) for these actions, so they're
