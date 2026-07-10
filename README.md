@@ -82,3 +82,18 @@ Run `gh-bot --help` or `gh-bot <command> --help` (e.g. `gh-bot issue-update
 
 Each invocation mints a fresh short-lived installation token (no caching),
 so no bot credentials are ever persisted outside your `.env`/`.pem`.
+
+### Teaching an agent to use it
+
+Paste something like this into your `CLAUDE.md`/`AGENTS.md` so agentic
+coding tools use `gh-bot` (not `gh`) for these actions, so they're
+attributed to the bot instead of your own account:
+
+```markdown
+## gh-bot
+
+Use `gh-bot` instead of `gh` when posting issue/PR comments, replying to
+PR review comments, or creating/updating issues, so the activity is
+attributed to the bot account rather than mine. Run `gh-bot --help` (or
+`gh-bot <command> --help`) to see available commands and options.
+```
