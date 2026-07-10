@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# Wrapper around `gh` that authenticates as the stapps-d2 GitHub App bot
+# instead of the caller's own `gh auth login` session, so automated
+# comments (Claude Code, Codex, etc.) show up as the bot.
+#
+# Config (env vars, typically loaded from a gitignored .env):
+#   GH_BOT_APP_ID           GitHub App ID
+#   GH_BOT_PRIVATE_KEY_PATH Path to the App's private key (.pem)
+#
+# The installation ID is looked up per-repo at runtime (via the App's JWT),
+# so the same App/key work across any org/account the App is installed on.
+#
+# Usage:
+#   gh-bot comment --repo owner/repo --number 123 ["text"]
+#   gh-bot reply --repo owner/repo --pr 123 --comment-id ID ["text"]
+#
+# If "text" is omitted, the body is read from stdin.
+
+set -euo pipefail
+
+print_help() {
+  cat <<'EOF'
+gh-bot — post issue/PR comments as the stapps-d2 GitHub App bot
+
+USAGE:
+  gh-bot <command> [options]
+
+COMMANDS:
+  comment          Post a general comment on an issue or PR
+  reply            Reply to an existing PR review (line) comment thread
+
+CONFIG (env vars, typically loaded from a gitignored .env next to this script):
+  GH_BOT_APP_ID           GitHub App ID
+  GH_BOT_PRIVATE_KEY_PATH Path to the App's private key (.pem)
+
+  The installation ID is looked up per-repo at runtime (via the App's JWT),
+  so the same App/key work across any org/account the App is installed on.
+
+Run 'gh-bot <command> --help' for command-specific options.
+EOF
+}
+
+print_comment_help() {
+  cat <<'EOF'
+gh-bot comment — post a general comment on an issue or PR
+
+USAGE:
+  gh-bot comment --repo owner/repo --number N ["text"]
+
+OPTIONS:
+  --repo owner/repo    Target repository (required)
+  --number N           Issue or PR number (required)
+  --body, --comment    Comment body (or pass as a trailing positional arg)
+  [text]               Comment body; if omitted (and no --body), read from stdin
+
+EXAMPLES:
+  gh-bot comment --repo owner/repo --number 123 "Looks good to me."
+  gh-bot comment --repo owner/repo --number 123 --body "Looks good to me."
+  gh-bot comment --repo owner/repo --number 123 <<'BODY'
+  Multi-line
+  comment body.
+  BODY
+EOF
+}
+
+print_reply_help() {
+  cat <<'EOF'
+gh-bot reply — reply to an existing PR review (line) comment thread
+
+USAGE:
+  gh-bot reply --repo owner/repo --pr N --comment-id ID ["text"]
+
+OPTIONS:
+  --repo owner/repo    Target repository (required)
+  --pr N               Pull request number (required)
+  --comment-id ID      ID of the review comment to reply to (required)
+  --body, --comment    Reply body (or pass as a trailing positional arg)
+  [text]               Reply body; if omitted (and no --body), read from stdin
+
+Find --comment-id via the review comment's API URL/webhook payload (the
+"id" field), or `gh api repos/OWNER/REPO/pulls/N/comments` to list them.
+
+EXAMPLE:
+  gh-bot reply --repo owner/repo --pr 123 --comment-id 987654321 \
+    "Fixed in a1b2c3d, thanks!"
+EOF
+}
+
+case "${1:-}" in
+  ""|help)
+    print_help
+    exit 0
+    ;;
+  comment)
+    for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && { print_comment_help; exit 0; }; done
+    ;;
+  reply)
+    for arg in "$@"; do [[ "$arg" == "-h" || "$arg" == "--help" ]] && { print_reply_help; exit 0; }; done
+    ;;
+  -h|--help)
+    print_help
+    exit 0
+    ;;
+esac
+
+script_path="${BASH_SOURCE[0]}"
+while [[ -L "$script_path" ]]; do
+  link_target="$(readlink "$script_path")"
+  if [[ "$link_target" = /* ]]; then
+    script_path="$link_target"
+  else
+    script_path="$(dirname "$script_path")/$link_target"
+  fi
+done
+script_dir="$(cd "$(dirname "$script_path")" && pwd)"
+if [[ -f "$script_dir/../.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$script_dir/../.env"
+  set +a
+fi
+
+: "${GH_BOT_APP_ID:?GH_BOT_APP_ID is not set}"
+: "${GH_BOT_PRIVATE_KEY_PATH:?GH_BOT_PRIVATE_KEY_PATH is not set}"
+
+# A relative GH_BOT_PRIVATE_KEY_PATH is relative to the repo root (next to
+# .env), not to the caller's cwd, so gh-bot works the same from anywhere.
+if [[ "$GH_BOT_PRIVATE_KEY_PATH" != /* ]]; then
+  GH_BOT_PRIVATE_KEY_PATH="$script_dir/../$GH_BOT_PRIVATE_KEY_PATH"
+fi
+if [[ ! -f "$GH_BOT_PRIVATE_KEY_PATH" ]]; then
+  echo "GH_BOT_PRIVATE_KEY_PATH does not exist: $GH_BOT_PRIVATE_KEY_PATH" >&2
+  exit 1
+fi
+
+base64url() {
+  base64 -w0 | tr '+/' '-_' | tr -d '='
+}
+
+make_jwt() {
+  local now iat exp header payload signing_input signature
+  now=$(date +%s)
+  iat=$((now - 60))
+  exp=$((now + 570)) # max allowed lifetime is 10 minutes
+
+  header=$(printf '{"alg":"RS256","typ":"JWT"}' | base64url)
+  payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' "$iat" "$exp" "$GH_BOT_APP_ID" | base64url)
+  signing_input="${header}.${payload}"
+  signature=$(printf '%s' "$signing_input" | openssl dgst -sha256 -sign "$GH_BOT_PRIVATE_KEY_PATH" | base64url)
+
+  printf '%s.%s' "$signing_input" "$signature"
+}
+
+get_installation_id() {
+  local repo="$1" jwt response id
+  jwt=$(make_jwt)
+  response=$(curl -sS \
+    -H "Authorization: Bearer $jwt" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${repo}/installation")
+  id=$(printf '%s' "$response" | jq -r '.id // empty')
+  if [[ -z "$id" ]]; then
+    echo "Could not find an installation of the App for ${repo}. Is it installed there?" >&2
+    echo "$response" >&2
+    exit 1
+  fi
+  printf '%s' "$id"
+}
+
+get_installation_token() {
+  local repo="$1" installation_id jwt
+  installation_id=$(get_installation_id "$repo")
+  jwt=$(make_jwt)
+  curl -sS -X POST \
+    -H "Authorization: Bearer $jwt" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/app/installations/${installation_id}/access_tokens" \
+    | jq -r '.token'
+}
+
+read_body() {
+  # Prints the given text arg, or reads stdin if none was given.
+  if [[ $# -gt 0 ]]; then
+    printf '%s' "$1"
+  else
+    cat
+  fi
+}
+
+cmd_comment() {
+  local repo="" number="" body_arg=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="$2"; shift 2 ;;
+      --number) number="$2"; shift 2 ;;
+      --body|--comment) body_arg=("$2"); shift 2 ;;
+      --*) echo "gh-bot comment: unknown option '$1'" >&2; exit 1 ;;
+      *) body_arg+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$repo" && -n "$number" ]] || { echo "usage: gh-bot comment --repo owner/repo --number N [text]" >&2; exit 1; }
+
+  local body token
+  body=$(read_body "${body_arg[@]:-}")
+  token=$(get_installation_token "$repo")
+
+  GH_TOKEN="$token" gh api "repos/${repo}/issues/${number}/comments" -f body="$body" >/dev/null
+  echo "Comment posted on ${repo}#${number}"
+}
+
+cmd_reply() {
+  local repo="" pr="" comment_id="" body_arg=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="$2"; shift 2 ;;
+      --pr) pr="$2"; shift 2 ;;
+      --comment-id) comment_id="$2"; shift 2 ;;
+      --body|--comment) body_arg=("$2"); shift 2 ;;
+      --*) echo "gh-bot reply: unknown option '$1'" >&2; exit 1 ;;
+      *) body_arg+=("$1"); shift ;;
+    esac
+  done
+  [[ -n "$repo" && -n "$pr" && -n "$comment_id" ]] || {
+    echo "usage: gh-bot reply --repo owner/repo --pr N --comment-id ID [text]" >&2
+    exit 1
+  }
+
+  local body token
+  body=$(read_body "${body_arg[@]:-}")
+  token=$(get_installation_token "$repo")
+
+  GH_TOKEN="$token" gh api "repos/${repo}/pulls/${pr}/comments/${comment_id}/replies" -f body="$body" >/dev/null
+  echo "Reply posted on ${repo}#${pr} (in reply to comment ${comment_id})"
+}
+
+main() {
+  local sub="${1:-}"
+  [[ $# -gt 0 ]] && shift || true
+  case "$sub" in
+    comment) cmd_comment "$@" ;;
+    reply) cmd_reply "$@" ;;
+    *)
+      echo "usage: gh-bot <comment|reply> [options]" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
