@@ -26,6 +26,7 @@ gh-bot — post issue/PR comments as a GitHub App bot
 
 USAGE:
   gh-bot <command> [options]
+  gh-bot <command> --help   Show options for a specific command
 
 COMMANDS:
   comment          Post a general comment on an issue or PR
@@ -39,8 +40,6 @@ CONFIG (env vars, typically loaded from a gitignored .env next to this script):
 
   The installation ID is looked up per-repo at runtime (via the App's JWT),
   so the same App/key work across any org/account the App is installed on.
-
-Run 'gh-bot <command> --help' for command-specific options.
 EOF
 }
 
