@@ -9,14 +9,27 @@ yourself.
 
 The App's installation ID is looked up per-repo at runtime (via the App's
 own JWT), so the same App ID/private key work across any account or org the
-App is installed on — e.g. both `github.com/stilliard/*` and
-`github.com/wildfireinternet/*` — no per-org config needed.
+App is installed on — no per-org config needed.
+
+### Required App permissions
+
+Your GitHub App needs the following repository permissions (GitHub App
+settings → Permissions & events):
+
+| Permission              | Access         | Needed for                                     |
+|-------------------------|----------------|------------------------------------------------|
+| Metadata                | Read-only      | Required baseline for all GitHub Apps          |
+| Issues                  | Read and write | `comment`, `issue-create`, `issue-update`      |
+| Pull requests           | Read and write | `comment`, `reply` (PR review comment threads) |
+
+After changing permissions on an existing App, you must accept the updated
+permissions on each installation (GitHub will prompt you, or re-visit
+`https://github.com/settings/installations`).
 
 ### Setup
 
-1. Install the `stapps-d2` GitHub App on whichever accounts/orgs you want it
-   to comment in (`stilliard`, `wildfireinternet`, etc.) and on the specific
-   repos within each.
+1. Create a GitHub App and install it on whichever accounts/orgs you want it
+   to act in, and on the specific repos within each.
 2. Generate a private key for the App (GitHub App settings → "Generate a
    private key") and save the `.pem` file somewhere local (not in the repo).
 3. Copy `.env.example` to `.env` and fill in:
