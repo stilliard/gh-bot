@@ -258,7 +258,7 @@ cmd_comment() {
   [[ -n "$repo" && -n "$number" ]] || { echo "usage: gh-bot comment --repo owner/repo --number N [text]" >&2; exit 1; }
 
   local body token
-  body=$(read_body "${body_arg[@]:-}")
+  body=$(read_body "${body_arg[@]}")
   token=$(get_installation_token "$repo")
 
   GH_TOKEN="$token" gh api "repos/${repo}/issues/${number}/comments" -f body="$body" >/dev/null
@@ -283,7 +283,7 @@ cmd_reply() {
   }
 
   local body token
-  body=$(read_body "${body_arg[@]:-}")
+  body=$(read_body "${body_arg[@]}")
   token=$(get_installation_token "$repo")
 
   GH_TOKEN="$token" gh api "repos/${repo}/pulls/${pr}/comments/${comment_id}/replies" -f body="$body" >/dev/null
@@ -309,11 +309,11 @@ cmd_issue_create() {
   }
 
   local body token fields=() label assignee response number url
-  body=$(read_body "${body_arg[@]:-}")
-  for label in "${labels[@]:-}"; do
+  body=$(read_body "${body_arg[@]}")
+  for label in "${labels[@]}"; do
     [[ -n "$label" ]] && fields+=(-f "labels[]=$label")
   done
-  for assignee in "${assignees[@]:-}"; do
+  for assignee in "${assignees[@]}"; do
     [[ -n "$assignee" ]] && fields+=(-f "assignees[]=$assignee")
   done
   token=$(get_installation_token "$repo")
@@ -356,13 +356,13 @@ cmd_issue_update() {
   [[ -n "$title" ]] && fields+=(-f "title=$title")
   [[ -n "$state" ]] && fields+=(-f "state=$state")
   if [[ "$body_provided" -eq 1 ]]; then
-    body=$(read_body "${body_arg[@]:-}")
+    body=$(read_body "${body_arg[@]}")
     fields+=(-f "body=$body")
   fi
-  for label in "${labels[@]:-}"; do
+  for label in "${labels[@]}"; do
     [[ -n "$label" ]] && fields+=(-f "labels[]=$label")
   done
-  for assignee in "${assignees[@]:-}"; do
+  for assignee in "${assignees[@]}"; do
     [[ -n "$assignee" ]] && fields+=(-f "assignees[]=$assignee")
   done
   token=$(get_installation_token "$repo")
