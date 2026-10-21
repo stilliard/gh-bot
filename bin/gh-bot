@@ -347,6 +347,11 @@ cmd_issue_update() {
     echo "gh-bot issue-update: --state must be 'open' or 'closed'" >&2
     exit 1
   fi
+  # nothing passed? fall back to a body piped on stdin, an empty one is ignored so it can't blank the issue
+  if [[ -z "$title" && -z "$state" && "$body_provided" -eq 0 && ${#labels[@]} -eq 0 && ${#assignees[@]} -eq 0 && ! -t 0 ]]; then
+    body_arg=("$(cat)")
+    [[ -n "${body_arg[0]}" ]] && body_provided=1
+  fi
   if [[ -z "$title" && -z "$state" && "$body_provided" -eq 0 && ${#labels[@]} -eq 0 && ${#assignees[@]} -eq 0 ]]; then
     echo "gh-bot issue-update: nothing to update — pass --title/--state/--label/--assignee or a body" >&2
     exit 1
